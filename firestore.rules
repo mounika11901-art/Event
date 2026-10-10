@@ -1,0 +1,46 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function userDoc() { return get(/databases/$(database)/documents/users/$(request.auth.uid)); }
+    function isAdmin() { return signedIn() && userDoc().data.role == 'admin'; }
+    function isStudent() { return signedIn() && userDoc().data.role == 'student'; }
+
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.uid == uid
+        && request.resource.data.role == 'student'
+        && request.resource.data.email == request.auth.token.email;
+      allow update: if isAdmin() || (signedIn() && request.auth.uid == uid
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.rollNumber == resource.data.rollNumber
+        && request.resource.data.email == resource.data.email);
+      allow delete: if isAdmin();
+    }
+    match /rollClaims/{roll} {
+      allow read: if signedIn() && (isAdmin() || resource.data.uid == request.auth.uid);
+      // The signup transaction creates this claim together with the student profile.
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow update: if false;
+      allow delete: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+    }
+    match /events/{eventId} {
+      allow read: if signedIn();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (isStudent()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['registrationCount'])
+        && request.resource.data.registrationCount == resource.data.registrationCount + 1
+        && request.resource.data.registrationCount <= resource.data.capacity);
+    }
+    match /registrations/{registrationId} {
+      allow read: if signedIn() && (isAdmin() || resource.data.studentId == request.auth.uid);
+      allow create: if isStudent()
+        && request.resource.data.studentId == request.auth.uid
+        && request.resource.data.eventId is string;
+      allow update: if isAdmin();
+      allow delete: if isAdmin() || (signedIn() && resource.data.studentId == request.auth.uid);
+    }
+  }
+}
